@@ -1,0 +1,104 @@
+name: cwlab4
+
+x-app-env: &app-env
+  RAILS_ENV: production
+  NODE_ENV: production
+  RAILS_MAX_THREADS: "5"
+  WEB_CONCURRENCY: "0"
+  SIDEKIQ_CONCURRENCY: "3"
+  SECRET_KEY_BASE: "e5ee39f445184b5442501c7a7054e767a103cbbf90302eb9f59f898d10e1c8c80b6b009ec05018cc8b3c2f9c6f80189f38f4a1d9e9c9257d3390c5649c9713fc"
+  FRONTEND_URL: "http://127.0.0.1:28240"
+  POSTGRES_HOST: db
+  POSTGRES_PORT: "5432"
+  POSTGRES_USERNAME: postgres
+  POSTGRES_PASSWORD: postgres
+  POSTGRES_DATABASE: chatwoot
+  POSTGRES_STATEMENT_TIMEOUT: "60s"
+  REDIS_URL: "redis://redis:6379"
+  ACTIVE_STORAGE_SERVICE: local
+  RAILS_LOG_TO_STDOUT: "true"
+  DISABLE_TELEMETRY: "true"
+  ENABLE_ACCOUNT_SIGNUP: "false"
+  MAILER_SENDER_EMAIL: "Chatwoot Lab <noreply@lab.test>"
+  ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEY: "bWe1bbzjFJ2X47EsIYE1utp3A5/Ln+k0LeuNBYi3eFU="
+  ACTIVE_RECORD_ENCRYPTION_DETERMINISTIC_KEY: "b+P2gGF6EoqaLwOV8f3Ku442e4rueNi17wyIA9DjlBQ="
+  ACTIVE_RECORD_ENCRYPTION_KEY_DERIVATION_SALT: "DrnGo1sXTqDWEvlFbpDILuuLwPvP5yZnwl8XUVigrBc="
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    restart: "no"
+    mem_limit: 512m
+    shm_size: 256m
+    tmpfs:
+      - /var/lib/postgresql/data
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: chatwoot
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d chatwoot"]
+      interval: 3s
+      timeout: 3s
+      retries: 60
+
+  redis:
+    image: redis:7-alpine
+    restart: "no"
+    mem_limit: 128m
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 60
+
+  prepare:
+    build: .
+    image: cwlab4-app:v4.19.1
+    restart: "no"
+    mem_limit: 1200m
+    environment: *app-env
+    command: ["bundle", "exec", "rails", "db:chatwoot_prepare"]
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  seed:
+    build: .
+    image: cwlab4-app:v4.19.1
+    restart: "no"
+    mem_limit: 1200m
+    environment: *app-env
+    command: ["bundle", "exec", "rails", "runner", "/lab/seed.rb"]
+    volumes:
+      - ./seeds:/lab
+    depends_on:
+      prepare:
+        condition: service_completed_successfully
+
+  rails:
+    build: .
+    image: cwlab4-app:v4.19.1
+    restart: "no"
+    mem_limit: 1200m
+    environment: *app-env
+    command: ["bundle", "exec", "rails", "server", "-p", "3000", "-b", "0.0.0.0"]
+    ports:
+      - "127.0.0.1:28240:3000"
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+
+  sidekiq:
+    build: .
+    image: cwlab4-app:v4.19.1
+    restart: "no"
+    mem_limit: 700m
+    environment: *app-env
+    command: ["bundle", "exec", "sidekiq", "-C", "config/sidekiq.yml"]
+    depends_on:
+      seed:
+        condition: service_completed_successfully
